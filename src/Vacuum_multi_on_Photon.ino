@@ -2,12 +2,12 @@
  * Project Vacuum_multi_on_Photon
  * Description: Test du circuit imprimé pour le capteur de vide multilignes
  * Author: P. Leboeuf
- * Date: 22 oct. 2017
+ * Date: 24 oct. 2017
  */
 
 #include "Particle.h"
 #include "math.h"
-#define FirmwareVersion "0.0.1"     // Version du firmware du capteur.
+#define FirmwareVersion "0.0.2"     // Version du firmware du capteur.
 String F_Date  = __DATE__;
 String F_Time = __TIME__;
 String FirmwareDate = F_Date + " " + F_Time; //Date et heure de compilation UTC
@@ -62,6 +62,11 @@ bool LedState = false;
 unsigned long loopTime;
 unsigned long now;
 
+/* Define a log handler for log messages */
+SerialLogHandler logHandler(LOG_LEVEL_INFO, { // Logging level for non-application messages
+    { "app", LOG_LEVEL_WARN }                  // Logging level for application messages
+});
+
 SYSTEM_MODE(AUTOMATIC);
 
 // setup() runs once, when the device is first turned on.
@@ -70,10 +75,8 @@ void setup() {
   pinMode(lightSensorPowerPin, OUTPUT);
   pinMode(thermistorPowerPin, OUTPUT);
   pinMode(LedPin, OUTPUT);
-  Serial.begin(115200); // Pour débug
   now = micros();
-  loopTime = now;
-  /*setADCSampleTime(ADC_SampleTime_480Cycles);*/
+  loopTime = now;             // Initialize loop time
 }
 
 // loop() runs over and over again, as quickly as it can execute.
@@ -97,8 +100,7 @@ void loop() {
       lightRawValue = AverageReadings(lightSensorInputPin, NUMSAMPLES, 0);
       digitalWrite(lightSensorPowerPin, false); // Turn OFF the light sensor
 
-      /*Serial.printf(", thermistorRawValue = %.0f", thermistorRawValue);*/
-      /* Wait for the vacuum sensors to stabilize */
+      /* Wait 20 ms for the vacuum sensors to stabilize */
       delay(20UL);
       Vacuum_0_raw = AverageReadings(Vacuum_0_Pin, NUMSAMPLES, 0);
       Vacuum_1_raw = AverageReadings(Vacuum_1_Pin, NUMSAMPLES, 0);
@@ -106,19 +108,25 @@ void loop() {
       Vacuum_3_raw = AverageReadings(Vacuum_3_Pin, NUMSAMPLES, 0);
       digitalWrite(fiveVoltsEnablePin, false); // Turn OFF the pressure transducers
 
-      /*Serial.printf(" Vacuum_0 = %.0f", Vacuum_0_raw);*/
-      /*Serial.printf(", Vacuum_1 = %.0f", Vacuum_1_raw);*/
-      /*Serial.printf(", Vacuum_2 = %.0f", Vacuum_2_raw);*/
-      /*Serial.printf(", Vacuum_3_raw = %.0f", Vacuum_3_raw);*/
+      /* Log the measurements to the serial port */
+      Log.info("Temperature = %.1f°C", Temperature(thermistorRawValue));
+      Log.info("lightRawValue = %.0f", lightRawValue);
+      Log.info("Light int. = %.0f Lux", LightRaw2Lux(lightRawValue));
 
-      Serial.printf(", Temperature = %.1f", Temperature(thermistorRawValue));
-      Serial.printf(", lightRawValue = %.0f", lightRawValue);
-      Serial.printf(", Lux = %.0f", LightRaw2Lux(lightRawValue));
-      Serial.printf(", Vacuum_0 = %.1f inHg", VacRaw2kPa(Vacuum_0_raw));
-      Serial.printf(", Vacuum_1 = %.1f inHg", VacRaw2kPa(Vacuum_1_raw));
-      Serial.printf(", Vacuum_2 = %.1f inHg", VacRaw2kPa(Vacuum_2_raw));
-      Serial.printf(", Vacuum_3 = %.1f inHg", VacRaw2kPa(Vacuum_3_raw));
-      Serial.printlnf(", Loop time = %d", micros() - loopTime);
+      Log.trace("Vacuum_0_raw = %.0f", Vacuum_0_raw);
+      Log.info("Vacuum_0 = %.1f inHg", VacRaw2kPa(Vacuum_0_raw));
+
+      Log.trace("Vacuum_1_raw = %.0f", Vacuum_1_raw);
+      Log.info("Vacuum_1 = %.1f inHg", VacRaw2kPa(Vacuum_1_raw));
+
+      Log.trace("Vacuum_2_raw = %.0f", Vacuum_2_raw);
+      Log.info("Vacuum_2 = %.1f inHg", VacRaw2kPa(Vacuum_2_raw));
+
+      Log.trace("Vacuum_3_raw = %.0f", Vacuum_3_raw);
+      Log.info("Vacuum_3 = %.1f inHg", VacRaw2kPa(Vacuum_3_raw));
+
+      Log.warn("Loop time = %d us\n", micros() - loopTime);
+
       delay(2000UL);
       loopTime = micros();
   }
@@ -147,7 +155,7 @@ float Temperature(float RawADC) {
   float resistance;
   /* convert the value to resistance */
   resistance = SERIESRESISTOR / ((4095.0f / RawADC) - 1);
-  Serial.printf("Rtc = %.0f", resistance);
+  Log.trace("Rtm = %.0f ohms", resistance);
 
   /* Conversion en degrés Celcius */
   double steinhart;
@@ -174,7 +182,7 @@ float AverageReadings (int anInputPinNo, int NumberSamples, int interval) {
 
 double LightRaw2Lux (float raw){
   double Iout = (Vcc * raw / 4095.0f) / LOADRESISTOR;
-  Serial.printf(", Iout = %.6f A", Iout);
+  Log.trace("Iout = %.6f A", Iout);
   double Lux = pow( 10.0f, Iout / 0.00001f);
   return Lux;
 }
