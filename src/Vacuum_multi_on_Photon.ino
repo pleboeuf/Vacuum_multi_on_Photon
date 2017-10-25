@@ -14,7 +14,7 @@ String FirmwareDate = F_Date + " " + F_Time; //compilation date and time (UTC)
 
 // General definitions
 #define ONE_DAY_MILLIS (24 * 60 * 60 * 1000)
-#define myEventName "dev2_Data"     // Name of the event to be sent to the cloud
+#define myEventName "PL_Ph_A_Data"     // Name of the event to be sent to the cloud
 #define TimeBoundaryOffset 0        // Wake at time boundary plus some seconds
 #define sleepTimeInMinutes 1        // Duration of sleep for test
 #define NUMSAMPLES 5                // Number of readings to average to reduce the noise
@@ -55,8 +55,8 @@ char publishStr[45];
 // Declare general variables
 int LedPin = D7;
 bool LedState = false;
-unsigned long loopTime;
-unsigned long now;
+unsigned long loopStartTime;
+unsigned long loopEndTime;
 
 /* Define a log handler for log messages */
 SerialLogHandler logHandler(LOG_LEVEL_WARN, { // Logging level for non-application messages
@@ -71,12 +71,11 @@ void setup() {
   pinMode(lightSensorPowerPin, OUTPUT);
   pinMode(thermistorPowerPin, OUTPUT);
   pinMode(LedPin, OUTPUT);
-  now = micros();
-  loopTime = now;                             // Initialize loop time
 }
 
 void loop() {
   //
+  loopStartTime = millis();
   LedState = !LedState;                   // Toggle LED to show activity
   digitalWrite(LedPin, LedState);
 
@@ -89,7 +88,7 @@ void loop() {
   thermistorRawValue = AverageReadings(thermistorInputPin, NUMSAMPLES, 0);
   tempDegreeC = rawTemp2DegreesC(thermistorRawValue);
   Log.info("Temperature = %.1f°C", tempDegreeC);
-    digitalWrite(thermistorPowerPin, false); // Turn OFF the Thermistor
+  digitalWrite(thermistorPowerPin, false); // Turn OFF the Thermistor
 
   /* Read and log the ambieant light intensity */
   lightRawValue = AverageReadings(lightSensorInputPin, NUMSAMPLES, 0);
@@ -107,37 +106,40 @@ void loop() {
     Log.info("Vacuum_%d = %.1f inHg", i, VacuumInHg[i]);
   }
   digitalWrite(vacuum5VoltsEnablePin, false); // Turn OFF the pressure transducers
-
   // Log the loop time at the warning level (.warn)
-  Log.warn("Loop time = %d us\n", micros() - loopTime);
-  delay(2000UL);
-  loopTime = micros();
+  loopEndTime =  millis() - loopStartTime;
+  publishData(loopEndTime);
+  Log.warn("Loop time = %d ms\n", loopEndTime);
+  /*delay(30000UL);*/
+  System.sleep(D2, RISING, 30UL);
 }
 
-void publishData() {
-  /*
-  FuelGauge fuel;
-  // Publish voltage and SOC, RSSI, QUALITY. plus Tx & Rx count
-  sprintf(publishStr, "%d, %02.4f, %03.3f, %d, %d, %d, %d, %03.3f",
-          cycleNumber - 1, fuel.getVCell(), fuel.getSoC(), signalRSSI, signalQuality, deltaTx, deltaRx, aw_time);
-  sprintf(publishStr, "%.1f, %.0f, %.1f, %.1f, %.1f, %.1f, %02.4f, %03.3f, %d, %d", tempDegreeC, lightIntensityLux, V
-          acuumInHg[0], VacuumInHg[1], VacuumInHg[2], VacuumInHg[3], fuel.getVCell(), fuel.getSoC(), signalRSSI, signalQuality);
-  Log.info(publishStr);
-  Particle.publish(myEventName, publishStr, PRIVATE, NO_ACK);
-  start = millis();
-  while (millis() - start < 500UL) {
+
+/*  */
+void publishData(unsigned long loopDuration) {
+  /*FuelGauge fuel;*/
+  // Publish temperature in °C, light intensity in Lux, four channel of vacuum, battery voltage and % charge, RSSI, QUALITY. plus Tx & Rx count
+  /*sprintf(publishStr, "%.1f, %.0f, %.1f, %.1f, %.1f, %.1f, %02.4f, %03.3f, %d, %d", tempDegreeC, lightIntensityLux, V
+          acuumInHg[0], VacuumInHg[1], VacuumInHg[2], VacuumInHg[3], fuel.getVCell(), fuel.getSoC(), signalRSSI, signalQuality);*/
+  // Publish temperature in °C, light intensity in Lux, four channel of vacuum
+  sprintf(publishStr, "%.1f, %.0f, %.1f, %.1f, %.1f, %.1f", tempDegreeC, lightIntensityLux,
+              VacuumInHg[0], VacuumInHg[1], VacuumInHg[2], VacuumInHg[3]);
+  Log.info("Published: %s", publishStr);
+  Particle.publish(myEventName, publishStr, PRIVATE, WITH_ACK);
+  unsigned long start = millis();
+  while (millis() - start < 3000UL) {
       Particle.process(); // Wait a second to received the time.
   }
-  */
+  Log.info("End publish routine");
 }
 
-/* Fonction de conversion valeur numérique vers pression (vide) en Kpa
- * D'aprés le datasheet du MPXV6115V6U
+/* Convert ADC raw value to Kpa or inHg
+ * From MPXV6115V6U datasheet
  * Vout = Vs * (K_fact * Vac + 0.92)
- * ou K_fact = 0.007652
- * soit : Vac_kpa = (Vout / Vs * K_fact) - (0,92 / K_fact)
- * avec Vout = (Vref*Vraw/4095UL)*(r1+r2)/r2
- * pour convertir de kpa to Hg (inch of mercury) il faut multiplier par 0.295301
+ * where K_fact = 0.007652
+ * thus : Vac_kpa = (Vout / Vs * K_fact) - (0,92 / K_fact)
+ * and Vout = (Vref*Vraw/4095UL)*(r1+r2)/r2
+ * To convert kpa to Hg (inch of mercury) multiply by 0.295301
  */
 double VacRaw2kPa(float raw) {
   double Vout = (Vref * raw / 4095.0f) * (R1 + R2) / R2;      // Vout = Vref*Vraw*(r1_+r2_)/(4096*r2_)
