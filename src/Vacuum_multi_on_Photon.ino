@@ -7,17 +7,36 @@
 
 #include "Particle.h"
 #include "math.h"
-#define FirmwareVersion "0.0.2"     // Version du firmware du capteur.
+#define FirmwareVersion "0.0.3"     // Version of this firmware.
 String F_Date  = __DATE__;
 String F_Time = __TIME__;
-String FirmwareDate = F_Date + " " + F_Time; //Date et heure de compilation UTC
+String FirmwareDate = F_Date + " " + F_Time; //compilation date and time (UTC)
 
+// General definitions
 #define ONE_DAY_MILLIS (24 * 60 * 60 * 1000)
-#define myEventName "dev2_Data"    // Usage data
+#define myEventName "dev2_Data"     // Name of the event to be sent to the cloud
 #define TimeBoundaryOffset 0        // Wake at time boundary plus some seconds
 #define sleepTimeInMinutes 1        // Duration of sleep for test
+#define NUMSAMPLES 5                // Number of readings to average to reduce the noise
 
-// Definition for vacuum transducer
+// Thermistor parameters and variable definition
+#define TEMPERATURENOMINAL 25       // Ref temperature for thermistor
+#define BCOEFFICIENT 3270           // The beta coefficient at 0 degrees of the thermistor (nominal is 3435 (25/85))
+#define SERIESRESISTOR 10000UL      // the value of the resistor in serie with the thermistor
+#define THERMISTORNOMINAL 10000UL   // thermistor resistance at 25 degrees C
+int thermistorPowerPin = D1;
+int thermistorInputPin = A4;
+float thermistorRawValue = 0;
+float tempDegreeC = 0;
+
+// Light sensor parameters and variable definition
+#define LOADRESISTOR 51000UL        // Resistor used to convert current to voltage on the light sensor
+int lightSensorPowerPin = D0;
+int lightSensorInputPin = A5;
+float lightRawValue = 0;
+float lightIntensityLux = 0;
+
+// Vacuum transducer parameters and variable definition
 #define R1 16900UL                  // pressure xducer scaling resistor 1
 #define R2 32400UL                  // Pressure xducer scaling resistor 2
 #define Vref 3.3                    // Analog input reference voltage
@@ -25,111 +44,91 @@ String FirmwareDate = F_Date + " " + F_Time; //Date et heure de compilation UTC
 #define Vs 5.0                      // Vacuum xducer supply voltage
 #define Vcc 3.347                   //Analog system reference voltage
 #define ResistorScaling (R1 + R2) / R2 // To scale output of 5.0V xducer to 3.3V Electron input
+int vacuum5VoltsEnablePin = D5; // Vacuums sensors operate at 5V
+int VacuumPins[]      = {A0, A1, A2, A3};
+float VacuumRawData[] = {0, 0, 0, 0};
+float VacuumInHg[]    = {0, 0, 0, 0};
 
-// Definition for thermistor
-#define TEMPERATURENOMINAL 25       // Ref temperature for thermistor
-#define BCOEFFICIENT 3270           // The beta coefficient at 0 degrees of the thermistor (nominal is 3435 (25/85))
-#define SERIESRESISTOR 10000UL      // the value of the resistor in serie with the thermistor
-#define THERMISTORNOMINAL 10000UL   // thermistor resistance at 25 degrees C
+// Publish string definition
+char publishStr[45];
 
-// Définition pour le capteur de lumière
-#define LOADRESISTOR 51000UL        // Resistor used to convert current to voltage on the light sensor
-
-#define NUMSAMPLES 5                // Number of readings to average to reduce the noise
-
-float Vacuum_0_raw = 0;
-float Vacuum_1_raw = 0;
-float Vacuum_2_raw = 0;
-float Vacuum_3_raw = 0;
-
-int Vacuum_0_Pin = A0;
-int Vacuum_1_Pin = A1;
-int Vacuum_2_Pin = A2;
-int Vacuum_3_Pin = A3;
-
-int lightSensorPowerPin = D0;
-int lightSensorInputPin = A5;
-float lightRawValue = 0;
-
-int thermistorPowerPin = D1;
-int thermistorInputPin = A4;
-float thermistorRawValue = 0;
-
-int fiveVoltsEnablePin = D5;
-
+// Declare general variables
 int LedPin = D7;
 bool LedState = false;
 unsigned long loopTime;
 unsigned long now;
 
 /* Define a log handler for log messages */
-SerialLogHandler logHandler(LOG_LEVEL_INFO, { // Logging level for non-application messages
-    { "app", LOG_LEVEL_WARN }                  // Logging level for application messages
+SerialLogHandler logHandler(LOG_LEVEL_WARN, { // Logging level for non-application messages
+    { "app", LOG_LEVEL_INFO }                 // Logging level for application messages
 });
 
 SYSTEM_MODE(AUTOMATIC);
 
 // setup() runs once, when the device is first turned on.
 void setup() {
-  pinMode(fiveVoltsEnablePin, OUTPUT);
+  pinMode(vacuum5VoltsEnablePin, OUTPUT);        //Put control pins in output mode
   pinMode(lightSensorPowerPin, OUTPUT);
   pinMode(thermistorPowerPin, OUTPUT);
   pinMode(LedPin, OUTPUT);
   now = micros();
-  loopTime = now;             // Initialize loop time
+  loopTime = now;                             // Initialize loop time
 }
 
-// loop() runs over and over again, as quickly as it can execute.
 void loop() {
-  // First test the Five volts system by toggling it for 5 sec ON and OFF
-  while (true)
-  {
-      LedState = !LedState; // Toggle LED to show activity
-      digitalWrite(LedPin, LedState);
+  //
+  LedState = !LedState;                   // Toggle LED to show activity
+  digitalWrite(LedPin, LedState);
 
-      /* Turn ON the Thermistor, light sensor and vacuum transducers,  */
-      digitalWrite(thermistorPowerPin, true);
-      digitalWrite(lightSensorPowerPin, true);
-      digitalWrite(fiveVoltsEnablePin, true);
+  /* Turn ON the Thermistor, light sensor and vacuum transducers,  */
+  digitalWrite(thermistorPowerPin, true);
+  digitalWrite(lightSensorPowerPin, true);
+  digitalWrite(vacuum5VoltsEnablePin, true);
 
-      /* Read the temperature */
-      thermistorRawValue = AverageReadings(thermistorInputPin, NUMSAMPLES, 0);
-      digitalWrite(thermistorPowerPin, false); // Turn OFF the Thermistor
+  /* Read and log the temperature */
+  thermistorRawValue = AverageReadings(thermistorInputPin, NUMSAMPLES, 0);
+  tempDegreeC = rawTemp2DegreesC(thermistorRawValue);
+  Log.info("Temperature = %.1f°C", tempDegreeC);
+    digitalWrite(thermistorPowerPin, false); // Turn OFF the Thermistor
 
-      /* Read the ambieant light intensity */
-      lightRawValue = AverageReadings(lightSensorInputPin, NUMSAMPLES, 0);
-      digitalWrite(lightSensorPowerPin, false); // Turn OFF the light sensor
+  /* Read and log the ambieant light intensity */
+  lightRawValue = AverageReadings(lightSensorInputPin, NUMSAMPLES, 0);
+  lightIntensityLux = LightRaw2Lux(lightRawValue);
+  Log.trace("lightRawValue = %.0f", lightRawValue);
+  Log.info("Light int. = %.0f Lux", lightIntensityLux);
+  digitalWrite(lightSensorPowerPin, false); // Turn OFF the light sensor
 
-      /* Wait 20 ms for the vacuum sensors to stabilize */
-      delay(20UL);
-      Vacuum_0_raw = AverageReadings(Vacuum_0_Pin, NUMSAMPLES, 0);
-      Vacuum_1_raw = AverageReadings(Vacuum_1_Pin, NUMSAMPLES, 0);
-      Vacuum_2_raw = AverageReadings(Vacuum_2_Pin, NUMSAMPLES, 0);
-      Vacuum_3_raw = AverageReadings(Vacuum_3_Pin, NUMSAMPLES, 0);
-      digitalWrite(fiveVoltsEnablePin, false); // Turn OFF the pressure transducers
-
-      /* Log the measurements to the serial port */
-      Log.info("Temperature = %.1f°C", Temperature(thermistorRawValue));
-      Log.info("lightRawValue = %.0f", lightRawValue);
-      Log.info("Light int. = %.0f Lux", LightRaw2Lux(lightRawValue));
-
-      Log.trace("Vacuum_0_raw = %.0f", Vacuum_0_raw);
-      Log.info("Vacuum_0 = %.1f inHg", VacRaw2kPa(Vacuum_0_raw));
-
-      Log.trace("Vacuum_1_raw = %.0f", Vacuum_1_raw);
-      Log.info("Vacuum_1 = %.1f inHg", VacRaw2kPa(Vacuum_1_raw));
-
-      Log.trace("Vacuum_2_raw = %.0f", Vacuum_2_raw);
-      Log.info("Vacuum_2 = %.1f inHg", VacRaw2kPa(Vacuum_2_raw));
-
-      Log.trace("Vacuum_3_raw = %.0f", Vacuum_3_raw);
-      Log.info("Vacuum_3 = %.1f inHg", VacRaw2kPa(Vacuum_3_raw));
-
-      Log.warn("Loop time = %d us\n", micros() - loopTime);
-
-      delay(2000UL);
-      loopTime = micros();
+  delay(20UL); // Wait 20 ms for the vacuum sensors to stabilize
+  /* Read and log the vacuum values */
+  for (int i = 0 ; i < 4; i++){
+    VacuumRawData[i] = AverageReadings(VacuumPins[i], NUMSAMPLES, 0);
+    VacuumInHg[i] = VacRaw2kPa(VacuumRawData[i]);
+    Log.trace("Vacuum_%d_raw = %.0f", i, VacuumRawData[i] );
+    Log.info("Vacuum_%d = %.1f inHg", i, VacuumInHg[i]);
   }
+  digitalWrite(vacuum5VoltsEnablePin, false); // Turn OFF the pressure transducers
+
+  // Log the loop time at the warning level (.warn)
+  Log.warn("Loop time = %d us\n", micros() - loopTime);
+  delay(2000UL);
+  loopTime = micros();
+}
+
+void publishData() {
+  /*
+  FuelGauge fuel;
+  // Publish voltage and SOC, RSSI, QUALITY. plus Tx & Rx count
+  sprintf(publishStr, "%d, %02.4f, %03.3f, %d, %d, %d, %d, %03.3f",
+          cycleNumber - 1, fuel.getVCell(), fuel.getSoC(), signalRSSI, signalQuality, deltaTx, deltaRx, aw_time);
+  sprintf(publishStr, "%.1f, %.0f, %.1f, %.1f, %.1f, %.1f, %02.4f, %03.3f, %d, %d", tempDegreeC, lightIntensityLux, V
+          acuumInHg[0], VacuumInHg[1], VacuumInHg[2], VacuumInHg[3], fuel.getVCell(), fuel.getSoC(), signalRSSI, signalQuality);
+  Log.info(publishStr);
+  Particle.publish(myEventName, publishStr, PRIVATE, NO_ACK);
+  start = millis();
+  while (millis() - start < 500UL) {
+      Particle.process(); // Wait a second to received the time.
+  }
+  */
 }
 
 /* Fonction de conversion valeur numérique vers pression (vide) en Kpa
@@ -148,16 +147,15 @@ double VacRaw2kPa(float raw) {
   return Vac_inHg;                              // multiplie par 0.295301 pour avoir la valeur en Hg
 }
 
-/* Fonction de conversion resistance vers temperature
- * Utilise l'équation de Steinhart simplifié
+/* Convert thermistor resistance to °C
+ * Use the simplified Steinhart equation
 */
-float Temperature(float RawADC) {
+float rawTemp2DegreesC(float RawADC) {
   float resistance;
   /* convert the value to resistance */
   resistance = SERIESRESISTOR / ((4095.0f / RawADC) - 1);
-  Log.trace("Rtm = %.0f ohms", resistance);
-
-  /* Conversion en degrés Celcius */
+  Log.trace("Rtm = %.0f ohms", resistance);         // Log (trace) intermediate results for debugging
+  /* Converst to degrees Celcius */
   double steinhart;
   steinhart = resistance / THERMISTORNOMINAL;       // (R/Ro)
   steinhart = log(steinhart);                       // ln(R/Ro)
@@ -168,21 +166,23 @@ float Temperature(float RawADC) {
   return steinhart - 0.7;                           // Return the temperature
 }
 
-/* Fonction d'acquisition des entrées analogues avec moyenne */
+/* Acquire N readings of an analog input and compute the average */
 float AverageReadings (int anInputPinNo, int NumberSamples, int interval) {
   float accumulator = 0;
   for (int i=0; i< NumberSamples; i++){
-    delay(interval);
-    accumulator += analogRead(anInputPinNo);
+    delay(interval);                                // In case a delay is required between successives readings
+    accumulator += analogRead(anInputPinNo);        // Read data from selected analog input and accumulate the readings
   }
-  return accumulator / NumberSamples;
+  return accumulator / NumberSamples;               // Divide the accumulator by the number of readings
 }
 
-/* Fonction de conversion valeur numérique vers intensité lumineuse en Lux */
-
+/* Convert ADC numerical value to light intensity in Lux for the APDS-9007 chip
+ * The resistor LOADRESISTOR is used to convert (Iout) the output current to a voltage
+ * that is measured by the analog to digital converter. This chip is logarithmic (base 10).
+*/
 double LightRaw2Lux (float raw){
-  double Iout = (Vcc * raw / 4095.0f) / LOADRESISTOR;
-  Log.trace("Iout = %.6f A", Iout);
-  double Lux = pow( 10.0f, Iout / 0.00001f);
+  double Iout = (Vcc * raw / 4095.0f) / LOADRESISTOR; // Calculate the chip output current from raw data
+  Log.trace("Iout = %.6f A", Iout);                   // Log (trace) intermediate results for debugging
+  double Lux = pow( 10.0f, Iout / 0.00001f);          // Compute the value in LUX
   return Lux;
 }
