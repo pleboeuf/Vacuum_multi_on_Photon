@@ -1,0 +1,4 @@
+{
+    "C_Cpp.default.configurationProvider": "particle.particle-vscode-core",
+    "particle.targetPlatform": "electron"
+}
