@@ -79,7 +79,7 @@ int minPublishTemp = 5;
 
 // Light sensor parameters and variable definitions
 #define LOADRESISTOR 51000UL                  // Resistor used to convert current to voltage on the light sensor
-int lightSensorPowerPin = D0;
+int lightSensorEnablePin = D0;
 int lightSensorInputPin = A5;
 float lightIntensityLux = 0;
 
@@ -118,19 +118,19 @@ time_t newGenTimestamp = 0;
 
 // PMIC pmic;
 /* Define a log handler on Serial for log messages */
-SerialLogHandler logHandler(LOG_LEVEL_WARN, {   // Logging level for non-application messages
+SerialLogHandler logHandler(LOG_LEVEL_TRACE, {   // Logging level for non-application messages
   { "app", LOG_LEVEL_TRACE }                            // Logging level for application messages
 });
 /* Define a log handler on Serial1 for log messages */
-Serial1LogHandler log1Handler(115200, LOG_LEVEL_WARN, {   // Logging level for non-application messages
-  { "app", LOG_LEVEL_TRACE }                            // Logging level for application messages
+Serial1LogHandler log1Handler(115200, LOG_LEVEL_TRACE, {   // Logging level for non-application messages
+  { "app", LOG_LEVEL_INFO }                             // Logging level for application messages
 });
 
 
 void setup() {
   Time.zone(-4);
   pinMode(vacuum5VoltsEnablePin, OUTPUT);              // Put all control pins in output mode
-  pinMode(lightSensorPowerPin, OUTPUT);
+  pinMode(lightSensorEnablePin, OUTPUT);
   pinMode(thermistorPowerPin, OUTPUT);
   pinMode(BLUE_LED, OUTPUT);
   pinMode(wakeupPin, INPUT_PULLUP);
@@ -150,6 +150,7 @@ void setup() {
 
 
 void loop() {
+  digitalWrite(lightSensorEnablePin, false);                                  // Turn ON the light sensor Power
   if (Time.day() != lastDay || Time.year() < 2000){    // a new day calls for a sync
      Log.trace("Sync time");
      if(waitFor(Particle.connected, 1 * 60000UL)){
@@ -166,8 +167,8 @@ void loop() {
   tempDegreeC = readThermistor(NUMSAMPLES, 1);            // First check the temperature
 
   if (tempDegreeC >= (float)minPublishTemp){
-    lightIntensityLux = readLightIntensitySensor();       // Then light intensity
     readVacuums();                                        // Finally red the 4 vacuum transducers
+    lightIntensityLux = readLightIntensitySensor();       // Then light intensity
     // readCellularData("Before publish \t", TRUE);          // Read amount of data sent during previous cycle
     // checkSignal();                                        // Read cellular signal strength and quality
     s_time = millis();                                    // Sleep time is now
@@ -180,13 +181,13 @@ void loop() {
     }
     Log.trace("Going to sleep at: %d\n", s_time);
   }
-
+  digitalWrite(lightSensorEnablePin, true);                                  // Turn ON the light sensor Power
   digitalWrite(BLUE_LED, false);                         // Turn off blue activity indicator before sleep
   // sleeps duration corrected to next time boundary + TimeBoundaryOffset seconds
   // wake at next time boundary + TimeBoundaryOffset seconds
   uint32_t dt = (SLEEPTIMEinMINUTES - Time.minute() % SLEEPTIMEinMINUTES) * 60 - Time.second() + TimeBoundaryOffset;
   // System.sleep(wakeupPin, FALLING, dt, SLEEP_NETWORK_STANDBY); // Press wakup BUTTON to awake
-  delay (SLEEPTIMEinMINUTES * 60000UL);
+  delay (SLEEPTIMEinMINUTES * 6000UL);
   digitalWrite(BLUE_LED, true);                           // Turn on blue activity indicator on wakup
   w_time = millis();
   Log.trace("Wake up at: %d", w_time);                   // Log wakup time
@@ -260,12 +261,13 @@ double VacRaw2inHg(float raw) {
 float readLightIntensitySensor(){
   float lightRawValue;
   float lightIntensity;
-  digitalWrite(lightSensorPowerPin, true);                                  // Turn ON the light sensor Power
+  // digitalWrite(lightSensorEnablePin, false);                                  // Turn ON the light sensor Power
+  delay(100UL);
   lightRawValue = AverageReadings(lightSensorInputPin, NUMSAMPLES, 10);     // Average multiple raw readings to reduce noise
   Log.trace("lightRawValue = %.0f", lightRawValue);                         // Log raw data at trace level for debugging
   lightIntensity = LightRaw2Lux(lightRawValue);                             // Convert to Lux
   Log.info("Light int. = %.0f Lux", lightIntensity);                        // Log final value at info level
-  digitalWrite(lightSensorPowerPin, false);                                 // Turn OFF the light sensor
+  // digitalWrite(lightSensorEnablePin, true);                                 // Turn OFF the light sensor
   return lightIntensity;
 }
 
